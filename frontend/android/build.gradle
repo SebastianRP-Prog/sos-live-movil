@@ -1,0 +1,21 @@
+allprojects {
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+def localBuildRoot = System.getenv("LOCALAPPDATA")
+rootProject.buildDir = localBuildRoot != null
+        ? "${localBuildRoot}/sos_live_movil_build"
+        : "../build"
+subprojects {
+    project.buildDir = "${rootProject.buildDir}/${project.name}"
+}
+subprojects {
+    project.evaluationDependsOn(":app")
+}
+
+tasks.register("clean", Delete) {
+    delete rootProject.buildDir
+}

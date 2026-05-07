@@ -1,0 +1,46 @@
+{
+  "project_info": {
+    "project_number": "1043689888340",
+    "project_id": "soslive-f7513",
+    "storage_bucket": "soslive-f7513.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1043689888340:android:c462759d7a168d14682bc1",
+        "android_client_info": {
+          "package_name": "com.sosLive.app"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "1043689888340-gloegn7pedftv4j0ktjevpoomq6kriqr.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCYZ4e6gEcAQs4yrF2Kv5KUn8oVQ4WBvls"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "1043689888340-gloegn7pedftv4j0ktjevpoomq6kriqr.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "1043689888340-ovkd30vkto975sut4d3b9813pvvtc1f7.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.SosLive.appssos"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
