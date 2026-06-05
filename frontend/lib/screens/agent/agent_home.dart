@@ -1087,8 +1087,10 @@ class _AgentGuardianViewState extends State<_AgentGuardianView> {
   }) async {
     if (_agentLocationUpdateBusy) return;
 
+    final agentId = widget.agentId.trim();
+    if (agentId.isEmpty) return;
+
     final alertId = _acceptedAlertId ?? _acceptedAlertIdFromCache();
-    if (alertId == null || alertId.isEmpty) return;
 
     _agentLocationUpdateBusy = true;
     final location = {
@@ -1099,27 +1101,57 @@ class _AgentGuardianViewState extends State<_AgentGuardianView> {
       if (accuracy != null) 'accuracy': accuracy,
       'updatedAt': FieldValue.serverTimestamp(),
     };
+    final locationLabel = 'lat $lat, lng $lng';
+    final agentUpdate = {
+      'location': location,
+      'mapa': {
+        ...location,
+        'label': locationLabel,
+        'query': '$lat,$lng',
+        'source': 'device',
+        'precision': 'exact',
+      },
+      'ubicacionExacta': locationLabel,
+      'ultimaUbicacionTexto': locationLabel,
+      'ultimaConexionAt': DateTime.now().toIso8601String(),
+      'updatedAt': FieldValue.serverTimestamp(),
+      if (widget.companyId.trim().isNotEmpty) ...{
+        'companyId': widget.companyId.trim(),
+        'companyUid': widget.companyId.trim(),
+      },
+    };
     final update = {
       'agentLocation': location,
       'guardianLocation': location,
-      'agentId': widget.agentId.trim(),
+      'agentId': agentId,
       'agentName': widget.agentName,
       'updatedAt': FieldValue.serverTimestamp(),
     };
 
     try {
       final db = FirebaseFirestore.instance;
-      await db
-          .collection('dashboard_alerts')
-          .doc(alertId)
-          .set(update, SetOptions(merge: true));
-      for (final collectionName in ['sos_alerts', 'alertas_activas']) {
+      for (final collectionName in ['dashboard_agents', 'Agentes']) {
         try {
           await db
               .collection(collectionName)
-              .doc(alertId)
-              .set(update, SetOptions(merge: true));
+              .doc(agentId)
+              .set(agentUpdate, SetOptions(merge: true));
         } catch (_) {}
+      }
+
+      if (alertId != null && alertId.isNotEmpty) {
+        await db
+            .collection('dashboard_alerts')
+            .doc(alertId)
+            .set(update, SetOptions(merge: true));
+        for (final collectionName in ['sos_alerts', 'alertas_activas']) {
+          try {
+            await db
+                .collection(collectionName)
+                .doc(alertId)
+                .set(update, SetOptions(merge: true));
+          } catch (_) {}
+        }
       }
     } catch (_) {
       // La ruta local sigue funcionando aunque Firestore rechace un pulso GPS.

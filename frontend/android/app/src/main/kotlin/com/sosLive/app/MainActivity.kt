@@ -98,7 +98,7 @@ class MainActivity : FlutterActivity() {
             volumePatternTimestamps.removeFirst()
         }
 
-        val matched = volumePatternTimestamps.size >= 3
+        val matched = volumePatternTimestamps.size >= 2
         if (matched) {
             volumePatternTimestamps.clear()
             lastVolumeKeyCode = null
