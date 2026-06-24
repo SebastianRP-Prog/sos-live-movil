@@ -130,8 +130,8 @@ flutter run
 Proyecto desarrollado por:
 * Juan Sebastian Rodriguez
 * William Andres Ospina
+---
 con el objetivo de crear soluciones tecnológicas enfocadas en la seguridad y protección de las personas.
-
 ---
 
 # Licencia
