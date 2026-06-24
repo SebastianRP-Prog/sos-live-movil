@@ -127,12 +127,10 @@ flutter run
 
 # Equipo de Desarrollo
 
-Proyecto desarrollado por:
+Con el objetivo de crear soluciones tecnológicas enfocadas en la seguridad y protección de las personas, proyecto creado por:
 * Juan Sebastian Rodriguez
 * William Andres Ospina
----
-con el objetivo de crear soluciones tecnológicas enfocadas en la seguridad y protección de las personas.
----
+
 
 # Licencia
 
