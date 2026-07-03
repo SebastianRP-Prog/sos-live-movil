@@ -1,6 +1,8 @@
+require("dotenv").config();
+
 const app = require("./src/app");
 
-const PORT = 3000;
+const PORT = Number(process.env.PORT || 3000);
 
 process.on("uncaughtException", (error) => {
   console.error("Uncaught exception:", error);

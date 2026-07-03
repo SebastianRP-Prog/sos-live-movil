@@ -382,6 +382,14 @@ class _GuardianScreenState extends State<GuardianScreen>
         'Ya tienes una alerta activa en esta ubicacion. Muevete para enviar otra.',
         error: true,
       );
+    } on NoActiveCompanyException {
+      _mostrarSnack(
+        'Primero selecciona una empresa y completa el pago.',
+        error: true,
+      );
+      if (mounted) {
+        Navigator.pushNamed(context, '/company-payment');
+      }
     } catch (e) {
       _mostrarSnack('Error al enviar SOS: $e', error: true);
     }

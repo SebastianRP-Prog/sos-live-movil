@@ -13,6 +13,9 @@ import 'screens/homescreen/guardian.dart';
 import 'screens/homescreen/maps.dart';
 import 'screens/homescreen/chats.dart';
 import 'screens/homescreen/notices.dart';
+import 'screens/homescreen/alert_history.dart';
+import 'screens/homescreen/sos_simulation.dart';
+import 'screens/payments/company_payment.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -54,6 +57,9 @@ class MyApp extends StatelessWidget {
         '/maps': (context) => const MapsScreen(),
         '/chats': (context) => const ChatsScreen(),
         '/notices': (context) => const NoticesScreen(),
+        '/company-payment': (context) => const CompanyPaymentScreen(),
+        '/simulacion': (context) => const SosSimulationScreen(),
+        '/historial': (context) => const AlertHistoryScreen(),
       },
     );
   }

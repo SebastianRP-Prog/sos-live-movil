@@ -1,9 +1,7 @@
-import 'dart:convert';
 import 'dart:math';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:http/http.dart' as http;
 
 class Notice {
   final String id;
@@ -49,6 +47,14 @@ class DuplicateSosLocationException implements Exception {
 
   @override
   String toString() => 'Ya tienes una alerta activa en esta misma ubicacion';
+}
+
+class NoActiveCompanyException implements Exception {
+  const NoActiveCompanyException();
+
+  @override
+  String toString() =>
+      'Selecciona una empresa y completa el pago antes de pedir ayuda';
 }
 
 class NoticeService {
@@ -101,6 +107,21 @@ class NoticeService {
     final guardianIds = guardianes is List
         ? guardianes.whereType<String>().toList()
         : <String>[];
+    final companyId = (userData['companyId'] ?? '').toString().trim();
+    final companyName = (userData['companyName'] ?? '').toString().trim();
+    final companyAccessStatus =
+        (userData['companyAccessStatus'] ?? '').toString().trim().toLowerCase();
+    final companyExpiresAt = userData['companyAccessExpiresAt'];
+    final companyAccessExpiresAt = companyExpiresAt is Timestamp
+        ? companyExpiresAt.toDate()
+        : DateTime.tryParse(companyExpiresAt?.toString() ?? '');
+    final hasActiveCompany = companyAccessStatus == 'active' &&
+        companyId.isNotEmpty &&
+        (companyAccessExpiresAt == null ||
+            companyAccessExpiresAt.isAfter(DateTime.now()));
+    if (!hasActiveCompany) {
+      throw const NoActiveCompanyException();
+    }
     final destinatarios = <String>[uid, ...guardianIds];
     final mapUrl = 'https://www.google.com/maps/search/?api=1&query=$lat,$lng';
 
@@ -114,6 +135,8 @@ class NoticeService {
       lat: lat,
       lng: lng,
       mapUrl: mapUrl,
+      companyId: hasActiveCompany ? companyId : '',
+      companyName: hasActiveCompany ? companyName : '',
     );
 
     try {
@@ -146,30 +169,20 @@ class NoticeService {
     required double lat,
     required double lng,
     required String mapUrl,
+    required String companyId,
+    required String companyName,
   }) async {
-    try {
-      await _crearAlertaBackend(
-        uid: uid,
-        nombre: nombre,
-        email: email,
-        guardianIds: guardianIds,
-        lat: lat,
-        lng: lng,
-        mapUrl: mapUrl,
-      );
-    } on DuplicateSosLocationException {
-      rethrow;
-    } catch (_) {
-      await _crearAlertaFirestore(
-        uid: uid,
-        nombre: nombre,
-        email: email,
-        guardianIds: guardianIds,
-        lat: lat,
-        lng: lng,
-        mapUrl: mapUrl,
-      );
-    }
+    await _crearAlertaFirestore(
+      uid: uid,
+      nombre: nombre,
+      email: email,
+      guardianIds: guardianIds,
+      lat: lat,
+      lng: lng,
+      mapUrl: mapUrl,
+      companyId: companyId,
+      companyName: companyName,
+    );
   }
 
   Future<void> _assertNoActiveSosAtLocation({
@@ -243,6 +256,8 @@ class NoticeService {
     required double lat,
     required double lng,
     required String mapUrl,
+    required String companyId,
+    required String companyName,
   }) async {
     final alertData = {
       'type': 'sos',
@@ -260,6 +275,8 @@ class NoticeService {
       'userName': nombre,
       'userEmail': email,
       'guardianIds': guardianIds,
+      if (companyId.isNotEmpty) 'companyId': companyId,
+      if (companyName.isNotEmpty) 'companyName': companyName,
       'agenteAsignado': 'Sin asignar',
       'location': {
         'lat': lat,
@@ -286,68 +303,6 @@ class NoticeService {
       'dashboardAlertId': dashboardAlertRef.id,
     });
     await batch.commit();
-  }
-
-  Future<void> _crearAlertaBackend({
-    required String uid,
-    required String nombre,
-    required String email,
-    required List<String> guardianIds,
-    required double lat,
-    required double lng,
-    required String mapUrl,
-  }) async {
-    final token = await _auth.currentUser?.getIdToken(true);
-    if (token == null) throw Exception('Usuario no autenticado');
-
-    final payload = jsonEncode({
-      'uid': uid,
-      'userName': nombre,
-      'userEmail': email,
-      'guardianIds': guardianIds,
-      'lat': lat,
-      'lng': lng,
-      'mapUrl': mapUrl,
-    });
-
-    Object? lastError;
-    for (final baseUrl in _backendBaseUrls) {
-      try {
-        final response = await http
-            .post(
-              Uri.parse('$baseUrl/api/auth/dashboard-alert'),
-              headers: {
-                'Content-Type': 'application/json',
-                'Authorization': 'Bearer $token',
-              },
-              body: payload,
-            )
-            .timeout(const Duration(seconds: 6));
-
-        if (response.statusCode >= 200 && response.statusCode < 300) return;
-        if (response.statusCode == 409) {
-          throw const DuplicateSosLocationException();
-        }
-        lastError = response.body;
-      } catch (error) {
-        lastError = error;
-      }
-    }
-
-    throw Exception('No se pudo crear la alerta SOS: $lastError');
-  }
-
-  List<String> get _backendBaseUrls {
-    const configuredUrl = String.fromEnvironment('API_BASE_URL');
-    final urls = <String>[
-      if (configuredUrl.trim().isNotEmpty) configuredUrl.trim(),
-      'http://192.168.101.12:3000',
-      'http://127.0.0.1:3000',
-      'http://localhost:3000',
-      'http://10.0.2.2:3000',
-    ];
-
-    return urls.toSet().toList(growable: false);
   }
 
   Future<void> marcarLeido(String noticeId) async {

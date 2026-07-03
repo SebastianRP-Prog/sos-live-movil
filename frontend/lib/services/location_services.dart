@@ -57,14 +57,28 @@ class LocationService {
   Future<void> iniciarTracking() async {
     await _gpsSub?.cancel();
 
+    try {
+      final initialPosition = await Geolocator.getCurrentPosition(
+        locationSettings:
+            const LocationSettings(accuracy: LocationAccuracy.high),
+      );
+      await _guardarUbicacion(initialPosition);
+    } catch (_) {
+      // El stream puede iniciar aunque la lectura puntual falle.
+    }
+
     _gpsSub = Geolocator.getPositionStream(
       locationSettings: const LocationSettings(
         accuracy: LocationAccuracy.high,
-        distanceFilter: 15, // cada 15 metros
+        distanceFilter: 5,
       ),
     ).listen((pos) async {
-      await _guardarUbicacion(pos);
-      await _verificarZonasPeligrosas(pos);
+      try {
+        await _guardarUbicacion(pos);
+        await _verificarZonasPeligrosas(pos);
+      } catch (_) {
+        // Un fallo temporal de red no debe detener el rastreo.
+      }
     });
   }
 

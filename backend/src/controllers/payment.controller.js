@@ -1,4 +1,5 @@
 const https = require("https");
+const crypto = require("crypto");
 const { admin, db } = require("../config/firebase");
 
 const normalizeText = (value = "") =>
@@ -20,9 +21,11 @@ const requireUser = async (req) => {
   return admin.auth().verifyIdToken(token);
 };
 
-const mercadoPagoRequest = ({ method = "GET", path, body }) =>
+const mercadoPagoRequest = ({ method = "GET", path, body, headers = {} }) =>
   new Promise((resolve, reject) => {
-    const accessToken = process.env.MERCADOPAGO_ACCESS_TOKEN;
+    const accessToken =
+      process.env.MERCADOPAGO_ACCESS_TOKEN ??
+      process.env.MERCADO_PAGO_ACCESS_TOKEN;
     if (!accessToken) {
       const error = new Error("Configura MERCADOPAGO_ACCESS_TOKEN en el backend");
       error.status = 500;
@@ -39,6 +42,7 @@ const mercadoPagoRequest = ({ method = "GET", path, body }) =>
         headers: {
           Authorization: `Bearer ${accessToken}`,
           "Content-Type": "application/json",
+          ...headers,
           ...(payload ? { "Content-Length": Buffer.byteLength(payload) } : {}),
         },
       },
@@ -86,15 +90,124 @@ const serializeCompany = (doc) => {
   };
 };
 
+const companyNameFromData = (data = {}) =>
+  `${
+    data.name ??
+    data.nombre ??
+    data.displayName ??
+    data.nombreEmpresa ??
+    data.nombre_empresa ??
+    data.razonSocial ??
+    data.razon_social ??
+    data.businessName ??
+    data.organizationName ??
+    data.companyName ??
+    data.empresaNombre ??
+    data.company?.name ??
+    data.company?.nombre ??
+    ""
+  }`.trim();
+
+const companyPlanFromData = ({ id, name, data = {} }) => ({
+  id,
+  name,
+  description:
+    data.description ??
+    data.descripcion ??
+    "Servicio de seguridad de la empresa",
+  price: Number(
+    data.price ??
+      data.precio ??
+      data.companyPrice ??
+      data.precioEmpresa ??
+      0,
+  ),
+  currency: data.currency ?? data.moneda ?? "COP",
+  planDays: Number(data.planDays ?? data.diasPlan ?? 30),
+});
+
+const loadReferencedCompanyIds = async () => {
+  const ids = new Set();
+  for (const collectionName of ["dashboard_agents", "Agentes"]) {
+    const snap = await db.collection(collectionName).limit(500).get();
+    for (const doc of snap.docs) {
+      const data = doc.data();
+      const companyId = `${
+        data.companyId ??
+        data.empresaId ??
+        data.companyUid ??
+        data.empresaUid ??
+        ""
+      }`.trim();
+      if (companyId) ids.add(companyId);
+    }
+  }
+  return [...ids];
+};
+
 exports.listCompanies = async (_req, res) => {
   try {
-    const snap = await db
-      .collection("companies")
-      .where("active", "==", true)
-      .limit(50)
-      .get();
+    const companiesById = new Map();
+    const collectionNames = [
+      "companies",
+      "empresas",
+      "Empresas",
+      "dashboard_companies",
+      "businesses",
+      "organizations",
+      "organizaciones",
+      "dashboard_users",
+      "company_users",
+    ];
 
-    const companies = snap.docs.map(serializeCompany);
+    for (const collectionName of collectionNames) {
+      const snap = await db.collection(collectionName).limit(500).get();
+      for (const doc of snap.docs) {
+        const data = doc.data();
+        if ((data.active ?? data.activa ?? true) === false) continue;
+        const name = companyNameFromData(data);
+        if (!name) continue;
+        companiesById.set(
+          doc.id,
+          companyPlanFromData({ id: doc.id, name, data }),
+        );
+      }
+    }
+
+    const companyIds = await loadReferencedCompanyIds();
+    for (const companyId of companyIds) {
+      if (companiesById.has(companyId)) continue;
+
+      let authUser = null;
+      try {
+        authUser = await admin.auth().getUser(companyId);
+      } catch (error) {
+        if (error.code !== "auth/user-not-found") throw error;
+      }
+
+      const claims = authUser?.customClaims ?? {};
+      const authName = `${
+        authUser?.displayName ??
+        claims.companyName ??
+        claims.nombreEmpresa ??
+        claims.razonSocial ??
+        ""
+      }`.trim();
+      if (!authName) continue;
+
+      companiesById.set(
+        companyId,
+        companyPlanFromData({
+          id: companyId,
+          name: authName,
+          data: claims,
+        }),
+      );
+    }
+
+    const companies = [...companiesById.values()].sort((a, b) =>
+      a.name.localeCompare(b.name, "es"),
+    );
     return res.status(200).json({ companies });
   } catch (error) {
     return res.status(500).json({
@@ -163,7 +276,16 @@ exports.createCompanyPreference = async (req, res) => {
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     });
 
-    const publicBaseUrl = `${process.env.PUBLIC_BASE_URL ?? ""}`.trim().replace(/\/$/, "");
+    const publicBaseUrl = `${
+      process.env.PUBLIC_BASE_URL ??
+      process.env.PUBLIC_BACKEND_URL ??
+      ""
+    }`
+      .trim()
+      .replace(/\/$/, "");
+    const returnBaseUrl = `${process.env.APP_RETURN_BASE_URL ?? "soslive://payments"}`
+      .trim()
+      .replace(/\/$/, "");
     const preferenceBody = {
       items: [
         {
@@ -185,15 +307,15 @@ exports.createCompanyPreference = async (req, res) => {
         user_id: decoded.uid,
         company_id: companyId,
       },
+      back_urls: {
+        success: `${returnBaseUrl}/success`,
+        failure: `${returnBaseUrl}/failure`,
+        pending: `${returnBaseUrl}/pending`,
+      },
+      auto_return: "approved",
       ...(publicBaseUrl
         ? {
             notification_url: `${publicBaseUrl}/api/auth/payments/mercadopago/webhook`,
-            back_urls: {
-              success: `${publicBaseUrl}/api/auth/payments/mercadopago/return?status=success`,
-              failure: `${publicBaseUrl}/api/auth/payments/mercadopago/return?status=failure`,
-              pending: `${publicBaseUrl}/api/auth/payments/mercadopago/return?status=pending`,
-            },
-            auto_return: "approved",
           }
         : {}),
     };
@@ -202,6 +324,7 @@ exports.createCompanyPreference = async (req, res) => {
       method: "POST",
       path: "/checkout/preferences",
       body: preferenceBody,
+      headers: { "X-Idempotency-Key": paymentRef.id },
     });
 
     await paymentRef.set(
@@ -214,11 +337,19 @@ exports.createCompanyPreference = async (req, res) => {
       { merge: true },
     );
 
+    const useSandbox =
+      `${process.env.MERCADOPAGO_USE_SANDBOX ?? "true"}`.toLowerCase() === "true";
+    const checkoutUrl =
+      useSandbox && preference.sandbox_init_point
+        ? preference.sandbox_init_point
+        : preference.init_point;
+
     return res.status(201).json({
       paymentId: paymentRef.id,
       preferenceId: preference.id,
       initPoint: preference.init_point,
       sandboxInitPoint: preference.sandbox_init_point,
+      checkoutUrl,
     });
   } catch (error) {
     return res.status(error.status || 500).json({
@@ -234,6 +365,24 @@ const activateCompanyForPayment = async ({ paymentId, mpPayment }) => {
   if (!paymentDoc.exists) return;
 
   const payment = paymentDoc.data();
+  const amountMatches =
+    Math.abs(Number(mpPayment.transaction_amount) - Number(payment.amount)) < 0.01;
+  const currencyMatches =
+    `${mpPayment.currency_id ?? ""}`.toUpperCase() ===
+    `${payment.currency ?? ""}`.toUpperCase();
+  if (!amountMatches || !currencyMatches) {
+    await paymentRef.set(
+      {
+        status: "invalid",
+        validationError: "amount_or_currency_mismatch",
+        mpPaymentId: `${mpPayment.id ?? ""}`,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      { merge: true },
+    );
+    return;
+  }
+
   const companyRef = db.collection("companies").doc(payment.companyId);
   const companyDoc = await companyRef.get();
   const company = companyDoc.exists ? serializeCompany(companyDoc) : null;
@@ -264,6 +413,7 @@ const activateCompanyForPayment = async ({ paymentId, mpPayment }) => {
   );
 
   if (normalizeText(status) !== "approved") return;
+  if (normalizeText(payment.status) === "approved" && payment.paidAt) return;
 
   await db.collection("users").doc(payment.userId).set(
     {
@@ -279,8 +429,42 @@ const activateCompanyForPayment = async ({ paymentId, mpPayment }) => {
   );
 };
 
+const validWebhookSignature = (req) => {
+  const secret = `${process.env.MERCADOPAGO_WEBHOOK_SECRET ?? ""}`.trim();
+  if (!secret) return true;
+
+  const signature = `${req.headers["x-signature"] ?? ""}`;
+  const requestId = `${req.headers["x-request-id"] ?? ""}`;
+  const dataId = `${
+    req.query["data.id"] ?? req.body.data?.id ?? req.query.id ?? ""
+  }`.toLowerCase();
+  const parts = Object.fromEntries(
+    signature.split(",").map((part) => {
+      const [key, ...value] = part.trim().split("=");
+      return [key, value.join("=")];
+    }),
+  );
+  if (!parts.ts || !parts.v1) return false;
+
+  const manifest = [
+    dataId ? `id:${dataId};` : "",
+    requestId ? `request-id:${requestId};` : "",
+    `ts:${parts.ts};`,
+  ].join("");
+  const expected = crypto.createHmac("sha256", secret).update(manifest).digest("hex");
+  const actualBuffer = Buffer.from(parts.v1, "hex");
+  const expectedBuffer = Buffer.from(expected, "hex");
+  return (
+    actualBuffer.length === expectedBuffer.length &&
+    crypto.timingSafeEqual(actualBuffer, expectedBuffer)
+  );
+};
+
 exports.mercadoPagoWebhook = async (req, res) => {
   try {
+    if (!validWebhookSignature(req)) {
+      return res.status(401).json({ error: "Firma de webhook invalida" });
+    }
     const type = `${req.body.type ?? req.query.type ?? req.query.topic ?? ""}`.trim();
     const paymentId =
       `${req.body.data?.id ?? req.query["data.id"] ?? req.query.id ?? ""}`.trim();

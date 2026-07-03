@@ -240,6 +240,7 @@ class AuthService {
     const configuredUrl = String.fromEnvironment('API_BASE_URL');
     final urls = <String>[
       if (configuredUrl.trim().isNotEmpty) configuredUrl.trim(),
+      'https://backend-movil.web.app',
       'http://192.168.101.12:3000',
       'http://10.0.2.2:3000',
       'http://127.0.0.1:3000',
@@ -320,13 +321,6 @@ class AuthService {
     final cleanCode = code.trim();
     if (cleanName.isEmpty || cleanCode.isEmpty) return null;
 
-    final backendAgent = await _loginAgentWithBackend(
-      name: cleanName,
-      code: cleanCode,
-    );
-    if (backendAgent?['__invalidAgent'] == true) return null;
-    if (backendAgent != null) return backendAgent;
-
     try {
       final agent = await _loginAgentFromFirestore(
         name: cleanName,
@@ -343,12 +337,36 @@ class AuthService {
       throw Exception('No se pudo verificar el agente. Revisa tu conexion');
     }
 
-    return null;
+    final backendAgent = await _loginAgentWithBackend(
+      name: cleanName,
+      code: cleanCode,
+    );
+    if (backendAgent?['__invalidAgent'] == true) return null;
+    return backendAgent;
   }
 
   Future<void> saveAgentSession(Map<String, dynamic> agent) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_agentSessionKey, jsonEncode(agent));
+    await prefs.setString(_agentSessionKey, jsonEncode(_jsonSafe(agent)));
+  }
+
+  dynamic _jsonSafe(dynamic value) {
+    if (value == null || value is String || value is num || value is bool) {
+      return value;
+    }
+    if (value is Timestamp) return value.toDate().toIso8601String();
+    if (value is DateTime) return value.toIso8601String();
+    if (value is GeoPoint) {
+      return {'lat': value.latitude, 'lng': value.longitude};
+    }
+    if (value is DocumentReference) return value.path;
+    if (value is Map) {
+      return value.map(
+        (key, nestedValue) => MapEntry(key.toString(), _jsonSafe(nestedValue)),
+      );
+    }
+    if (value is Iterable) return value.map(_jsonSafe).toList();
+    return value.toString();
   }
 
   Future<Map<String, dynamic>?> getSavedAgentSession() async {
@@ -379,15 +397,37 @@ class AuthService {
     required String code,
   }) async {
     const collectionNames = ['Agentes', 'dashboard_agents'];
+    const codeFields = ['codigo', 'code'];
 
     for (final collectionName in collectionNames) {
-      final snap = await _firestore.collection(collectionName).limit(150).get();
+      for (final codeField in codeFields) {
+        final snap = await _firestore
+            .collection(collectionName)
+            .where(codeField, isEqualTo: code)
+            .limit(20)
+            .get();
 
+        for (final doc in snap.docs) {
+          final data = doc.data();
+          final storedName = _readAgentName(data);
+          final storedCode = _readAgentCode(data);
+
+          if (_normalizeText(storedName) == _normalizeText(name) &&
+              storedCode == code) {
+            return _agentPayload(doc.id, data, fallbackName: storedName);
+          }
+        }
+      }
+    }
+
+    // Compatibilidad con documentos antiguos que guardan el codigo como
+    // numero o usan nombres de campo no estandar.
+    for (final collectionName in collectionNames) {
+      final snap = await _firestore.collection(collectionName).limit(500).get();
       for (final doc in snap.docs) {
         final data = doc.data();
         final storedName = _readAgentName(data);
         final storedCode = _readAgentCode(data);
-
         if (_normalizeText(storedName) == _normalizeText(name) &&
             storedCode == code) {
           return _agentPayload(doc.id, data, fallbackName: storedName);
@@ -478,47 +518,13 @@ class AuthService {
     String? agentId,
     String? companyId,
   }) async {
-    Object? lastError;
-    for (final baseUrl in _backendBaseUrls) {
-      try {
-        final uri = Uri.parse('$baseUrl/api/auth/dashboard-alerts').replace(
-          queryParameters: {
-            if (agentName != null && agentName.trim().isNotEmpty)
-              'agentName': agentName.trim(),
-            if (agentId != null && agentId.trim().isNotEmpty)
-              'agentId': agentId.trim(),
-            if (companyId != null && companyId.trim().isNotEmpty)
-              'companyId': companyId.trim(),
-          },
-        );
-        final response =
-            await http.get(uri).timeout(const Duration(seconds: 6));
-
-        if (response.statusCode >= 200 && response.statusCode < 300) {
-          final decoded = jsonDecode(response.body);
-          final alerts = decoded is Map ? decoded['alerts'] : null;
-          if (alerts is List) {
-            return alerts
-                .whereType<Map>()
-                .map((item) => Map<String, dynamic>.from(item))
-                .toList();
-          }
-          return <Map<String, dynamic>>[];
-        }
-
-        lastError = _backendErrorMessage(response);
-      } catch (error) {
-        lastError = error;
-      }
-    }
-
     try {
       return await _fetchDashboardAlertsFromFirestore(
         agentName: agentName,
         companyId: companyId,
       );
     } catch (error) {
-      throw Exception('No se pudieron cargar las alertas: $lastError / $error');
+      throw Exception('No se pudieron cargar las alertas: $error');
     }
   }
 
@@ -528,31 +534,6 @@ class AuthService {
     String? agentId,
     String? companyId,
   }) async {
-    Object? lastError;
-    for (final baseUrl in _backendBaseUrls) {
-      try {
-        final response = await http
-            .post(
-              Uri.parse('$baseUrl/api/auth/dashboard-alerts/$alertId/accept'),
-              headers: {'Content-Type': 'application/json'},
-              body: jsonEncode({
-                'agentName': agentName,
-                if (agentId != null && agentId.trim().isNotEmpty)
-                  'agentId': agentId.trim(),
-                if (companyId != null && companyId.trim().isNotEmpty)
-                  'companyId': companyId.trim(),
-              }),
-            )
-            .timeout(const Duration(seconds: 6));
-
-        if (response.statusCode >= 200 && response.statusCode < 300) return;
-
-        lastError = _backendErrorMessage(response);
-      } catch (error) {
-        lastError = error;
-      }
-    }
-
     try {
       await _updateDashboardAlertInFirestore(
         alertId: alertId,
@@ -563,7 +544,7 @@ class AuthService {
       );
       return;
     } catch (error) {
-      throw Exception('No se pudo aceptar la alerta: $lastError / $error');
+      throw Exception('No se pudo aceptar la alerta: $error');
     }
   }
 
@@ -571,25 +552,6 @@ class AuthService {
     required String alertId,
     required String agentName,
   }) async {
-    Object? lastError;
-    for (final baseUrl in _backendBaseUrls) {
-      try {
-        final response = await http
-            .post(
-              Uri.parse('$baseUrl/api/auth/dashboard-alerts/$alertId/close'),
-              headers: {'Content-Type': 'application/json'},
-              body: jsonEncode({'agentName': agentName}),
-            )
-            .timeout(const Duration(seconds: 6));
-
-        if (response.statusCode >= 200 && response.statusCode < 300) return;
-
-        lastError = _backendErrorMessage(response);
-      } catch (error) {
-        lastError = error;
-      }
-    }
-
     try {
       await _updateDashboardAlertInFirestore(
         alertId: alertId,
@@ -598,7 +560,7 @@ class AuthService {
       );
       return;
     } catch (error) {
-      throw Exception('No se pudo cerrar la alerta: $lastError / $error');
+      throw Exception('No se pudo cerrar la alerta: $error');
     }
   }
 
@@ -637,13 +599,9 @@ class AuthService {
         return false;
       }
 
-      if (alertCompanyId.isNotEmpty &&
-          normalizedCompanyId.isNotEmpty &&
+      if (alertCompanyId.isEmpty ||
+          normalizedCompanyId.isEmpty ||
           alertCompanyId != normalizedCompanyId) {
-        return false;
-      }
-
-      if (alertCompanyId.isNotEmpty && normalizedCompanyId.isEmpty) {
         return false;
       }
 

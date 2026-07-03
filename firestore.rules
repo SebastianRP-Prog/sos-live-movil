@@ -41,6 +41,34 @@ service cloud.firestore {
       allow create, delete: if false;
     }
 
+    match /companies/{companyId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    match /empresas/{companyId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    match /Empresas/{companyId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    match /dashboard_companies/{companyId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    match /company_payments/{paymentId} {
+      allow create: if signedIn()
+        && request.resource.data.userId == request.auth.uid
+        && request.resource.data.simulation == true;
+      allow read: if signedIn() && resource.data.userId == request.auth.uid;
+      allow update, delete: if false;
+    }
+
     match /chats/{chatId} {
       allow read, create, update: if true;
 

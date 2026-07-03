@@ -8,6 +8,8 @@ const normalizeEmail = (value = "") => value.trim().toLowerCase();
 const normalizePhone = (value = "") => value.replace(/\D/g, "");
 const normalizeText = (value = "") =>
   `${value}`.trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+const companyIdFromName = (value = "") =>
+  normalizeText(value).replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
 
 const DUPLICATE_SOS_RADIUS_METERS = 25;
 
@@ -48,7 +50,14 @@ const findAgentCompanyId = async ({ agentName, agentId }) => {
       const doc = await db.collection(collectionName).doc(id).get();
       if (doc.exists) {
         const data = doc.data();
-        const companyId = `${data.companyId ?? data.empresaId ?? ""}`.trim();
+        const companyId =
+          `${data.companyId ?? data.empresaId ?? data.companyUid ?? data.empresaUid ?? ""}`.trim() ||
+          companyIdFromName(
+            data.companyName ??
+              data.empresaNombre ??
+              data.nombreEmpresa ??
+              data.empresa,
+          );
         if (companyId) return companyId;
       }
     }
@@ -59,7 +68,14 @@ const findAgentCompanyId = async ({ agentName, agentId }) => {
         const data = doc.data();
         const name = `${data.nombre ?? data.name ?? ""}`.trim();
         if (normalizeText(name) === normalizedAgentName) {
-          const companyId = `${data.companyId ?? data.empresaId ?? ""}`.trim();
+          const companyId =
+            `${data.companyId ?? data.empresaId ?? data.companyUid ?? data.empresaUid ?? ""}`.trim() ||
+            companyIdFromName(
+              data.companyName ??
+                data.empresaNombre ??
+                data.nombreEmpresa ??
+                data.empresa,
+            );
           if (companyId) return companyId;
         }
       }
@@ -511,11 +527,11 @@ exports.listDashboardAlerts = async (req, res) => {
           return false;
         }
 
-        if (alertCompanyId && agentCompanyId && alertCompanyId !== agentCompanyId) {
-          return false;
-        }
-
-        if (alertCompanyId && !agentCompanyId) {
+        if (
+          !alertCompanyId ||
+          !agentCompanyId ||
+          alertCompanyId !== agentCompanyId
+        ) {
           return false;
         }
 

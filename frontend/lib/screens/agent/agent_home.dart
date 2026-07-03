@@ -66,10 +66,29 @@ class _AgentHomeScreenState extends State<AgentHomeScreen> {
           widget.agent['id'] ??
           '')
       .toString();
-  String get _agentCompanyId =>
-      (widget.agent['companyId'] ?? widget.agent['empresaId'] ?? '')
-          .toString()
-          .trim();
+  String get _agentCompanyId {
+    final id = (widget.agent['companyId'] ??
+            widget.agent['empresaId'] ??
+            widget.agent['companyUid'] ??
+            widget.agent['empresaUid'] ??
+            '')
+        .toString()
+        .trim();
+    if (id.isNotEmpty) return id;
+
+    final name = (widget.agent['companyName'] ??
+            widget.agent['empresaNombre'] ??
+            widget.agent['nombreEmpresa'] ??
+            widget.agent['empresa'] ??
+            '')
+        .toString()
+        .trim()
+        .toLowerCase();
+    return name
+        .replaceAll(RegExp(r'[^a-z0-9]+'), '-')
+        .replaceAll(RegExp(r'^-+|-+$'), '');
+  }
+
   String get _effectiveAgentId {
     final localUid = ChatService.localSessionUid;
     if (localUid != null && localUid.trim().isNotEmpty) {
@@ -249,11 +268,12 @@ class _AgentHomeScreenState extends State<AgentHomeScreen> {
         ),
       _AgentProfileView(
         agent: widget.agent,
-        onLogout: () {
-          unawaited(AuthService().clearAgentSession());
-          unawaited(FirebaseAuth.instance.signOut());
+        onLogout: () async {
+          await AuthService().clearAgentSession();
+          await FirebaseAuth.instance.signOut();
           ChatService.localSessionUid = null;
           ChatService.localSessionName = null;
+          if (!context.mounted) return;
           Navigator.pushNamedAndRemoveUntil(context, '/login', (_) => false);
         },
       ),
@@ -776,6 +796,8 @@ class _AgentGuardianViewState extends State<_AgentGuardianView> {
   Timer? _refreshTimer;
   StreamSubscription<Position>? _agentGpsSub;
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _acceptedAlertSub;
+  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>?
+      _trackedUserLocationSub;
   String? _acceptedAlertId;
   ll.LatLng? _lastRouteDestination;
   Map<String, dynamic>? _pendingRouteAlert;
@@ -814,6 +836,7 @@ class _AgentGuardianViewState extends State<_AgentGuardianView> {
     _refreshTimer?.cancel();
     _agentGpsSub?.cancel();
     _acceptedAlertSub?.cancel();
+    _trackedUserLocationSub?.cancel();
     super.dispose();
   }
 
@@ -951,17 +974,21 @@ class _AgentGuardianViewState extends State<_AgentGuardianView> {
     final alertId = (alert?['id'] ?? '').toString();
     if (alertId.isEmpty) {
       _acceptedAlertSub?.cancel();
+      _trackedUserLocationSub?.cancel();
       _acceptedAlertSub = null;
+      _trackedUserLocationSub = null;
       _acceptedAlertId = null;
       _lastRouteDestination = null;
       _pendingRouteAlert = null;
       return;
     }
-    if (alertId == _acceptedAlertId) return;
+    if (alertId == _acceptedAlertId && _acceptedAlertSub != null) return;
 
     _acceptedAlertSub?.cancel();
+    _trackedUserLocationSub?.cancel();
     _acceptedAlertId = alertId;
     _lastRouteDestination = _AlertMapPoint.fromAlert(alert!)?.position;
+    _watchTrackedUserLocation(alert);
     if (_routePoints.isEmpty && !_calculatingRoute) {
       unawaited(_calculateFastRoute(alert));
     }
@@ -976,25 +1003,58 @@ class _AgentGuardianViewState extends State<_AgentGuardianView> {
       final updatedAlert = {'id': snapshot.id, ...data};
       if (!_isAcceptedByMe(updatedAlert)) return;
 
-      setState(() {
-        final index =
-            _cachedAlerts.indexWhere((item) => item['id'] == snapshot.id);
-        if (index >= 0) {
-          _cachedAlerts[index] = updatedAlert;
-        } else {
-          _cachedAlerts = [updatedAlert, ..._cachedAlerts];
-        }
-      });
-
-      final destination = _AlertMapPoint.fromAlert(updatedAlert)?.position;
-      if (destination == null || !_destinationMoved(destination)) return;
-      if (_calculatingRoute) {
-        _pendingRouteAlert = updatedAlert;
-        return;
-      }
-      _lastRouteDestination = destination;
-      unawaited(_calculateFastRoute(updatedAlert));
+      _applyLiveAlertUpdate(updatedAlert);
     });
+  }
+
+  void _watchTrackedUserLocation(Map<String, dynamic> alert) {
+    final userId = (alert['userId'] ?? alert['uid'] ?? alert['senderId'] ?? '')
+        .toString()
+        .trim();
+    if (userId.isEmpty) return;
+
+    final alertId = (alert['id'] ?? '').toString();
+    _trackedUserLocationSub = FirebaseFirestore.instance
+        .collection('users')
+        .doc(userId)
+        .snapshots()
+        .listen((snapshot) {
+      final userData = snapshot.data();
+      final location = userData?['location'];
+      if (!mounted || location is! Map) return;
+
+      final currentAlert = _cachedAlerts.firstWhere(
+        (item) => item['id'] == alertId,
+        orElse: () => alert,
+      );
+      _applyLiveAlertUpdate({
+        ...currentAlert,
+        'ubicacionActiva': Map<String, dynamic>.from(location),
+      });
+    });
+  }
+
+  void _applyLiveAlertUpdate(Map<String, dynamic> updatedAlert) {
+    if (!mounted) return;
+
+    setState(() {
+      final alertId = updatedAlert['id'];
+      final index = _cachedAlerts.indexWhere((item) => item['id'] == alertId);
+      if (index >= 0) {
+        _cachedAlerts[index] = updatedAlert;
+      } else {
+        _cachedAlerts = [updatedAlert, ..._cachedAlerts];
+      }
+    });
+
+    final destination = _AlertMapPoint.fromAlert(updatedAlert)?.position;
+    if (destination == null || !_destinationMoved(destination)) return;
+    if (_calculatingRoute) {
+      _pendingRouteAlert = updatedAlert;
+      return;
+    }
+    _lastRouteDestination = destination;
+    unawaited(_calculateFastRoute(updatedAlert));
   }
 
   bool _destinationMoved(ll.LatLng destination) {
@@ -1692,7 +1752,7 @@ class _AlertMapPoint {
 
 class _AgentProfileView extends StatelessWidget {
   final Map<String, dynamic> agent;
-  final VoidCallback onLogout;
+  final Future<void> Function() onLogout;
 
   const _AgentProfileView({required this.agent, required this.onLogout});
 
@@ -1720,7 +1780,7 @@ class _AgentProfileView extends StatelessWidget {
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
             child: ElevatedButton.icon(
-              onPressed: onLogout,
+              onPressed: () => unawaited(onLogout()),
               icon: const Icon(Icons.logout, color: Colors.black),
               label: const Text(
                 'Cerrar sesión',

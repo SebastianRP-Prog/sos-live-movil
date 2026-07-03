@@ -40,6 +40,11 @@ class _LoginScreenState extends State<LoginScreen> {
     setState(() => _isLoading = true);
     try {
       if (_selectedRole == _LoginRole.agente) {
+        await _authService.clearAgentSession();
+        await FirebaseAuth.instance.signOut();
+        ChatService.localSessionUid = null;
+        ChatService.localSessionName = null;
+
         final agent = await _authService.loginAgent(
           name: emailController.text.trim(),
           code: passwordController.text.trim(),
@@ -57,19 +62,18 @@ class _LoginScreenState extends State<LoginScreen> {
               await FirebaseAuth.instance.signInWithCustomToken(customToken);
           final uid = credential.user?.uid;
           if (uid != null && uid.isNotEmpty) {
-            final agentId = (agent['codigo'] ??
-                    agent['code'] ??
-                    agent['agentId'] ??
-                    uid)
-                .toString()
-                .trim();
+            final agentId =
+                (agent['codigo'] ?? agent['code'] ?? agent['agentId'] ?? uid)
+                    .toString()
+                    .trim();
             agent['uid'] = agentId;
             agent['authUid'] = uid;
             agent['agentId'] = agentId;
             ChatService.localSessionUid = agentId;
-            ChatService.localSessionName =
-                (agent['nombre'] ?? agent['name'] ?? emailController.text.trim())
-                    .toString();
+            ChatService.localSessionName = (agent['nombre'] ??
+                    agent['name'] ??
+                    emailController.text.trim())
+                .toString();
           }
         } else {
           final agentId = (agent['codigo'] ??
@@ -91,7 +95,11 @@ class _LoginScreenState extends State<LoginScreen> {
                   .toString();
         }
 
-        await _authService.saveAgentSession(agent);
+        try {
+          await _authService.saveAgentSession(agent);
+        } catch (error) {
+          debugPrint('No se pudo guardar la sesion del agente: $error');
+        }
 
         if (!mounted) return;
         Navigator.pushReplacementNamed(
